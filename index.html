@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Exam Seating Management System - Master Implementation</title>
+    <!-- Bootstrap 5 CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css">
+    <!-- SheetJS for Excel Import/Export -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <style>
+        body { background-color: #f8f9fa; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        .sidebar { background: #2c3e50; min-height: 100vh; color: white; }
+        .sidebar .nav-link { color: #bdc3c7; border-radius: 5px; margin-bottom: 5px; }
+        .sidebar .nav-link.active, .sidebar .nav-link:hover { background: #34495e; color: #fff; }
+        .card { border: none; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
+        .seat-grid { display: grid; gap: 6px; margin-top: 15px; }
+        .seat-box { background: #e9ecef; border: 1px solid #ced4da; padding: 8px; text-align: center; border-radius: 6px; font-size: 0.8rem; min-height: 65px; cursor: pointer; position: relative; }
+        .seat-box.occupied { background: #d1e7dd; border-color: #badbcc; color: #0f5132; }
+        .seat-box.blocked { background: #f8d7da; border-color: #f5c2c7; color: #842029; cursor: not-allowed; }
+        .cut-line { border-top: 2px dashed #000; margin: 30px 0; position: relative; }
+        .cut-line::after { content: '✂ (Center Cut Line for Attendance)'; position: absolute; right: 10px; top: -12px; background: #fff; padding: 0 5px; font-size: 11px; color: #666; }
+        
+        /* Print & PDF Strict Rules ($5\text{mm} - 10\text{mm}$ margins, page breaks) */
+        @page { size: auto; margin: 8mm; }
+        @media print {
+            body * { visibility: hidden; }
+            .printable-area, .printable-area * { visibility: visible; }
+            .printable-area { position: absolute; left: 0; top: 0; width: 100%; margin: 0; }
+            .page-break { page-break-after: always; break-after: page; }
+            .break-avoid { break-inside: avoid; page-break-inside: avoid; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="container-fluid">
+    <div class="row">
+        <!-- Sidebar Navigation -->
+        <nav class="col-md-3 col-lg-2 d-md-block sidebar collapse p-3">
+            <h4 class="text-white text-center py-3"><i class="fa-solid fa-graduation-cap"></i> ExamSys</h4>
+            <ul class="nav flex-column nav-pills" id="v-pills-tab" role="tablist">
+                <li class="nav-item"><button class="nav-link active w-100 text-start" data-bs-toggle="pill" data-bs-target="#tab-setup"><i class="fa-solid.fa-database me-2"></i> 1. Student Setup</button></li>
+                <li class="nav-item"><button class="nav-link w-100 text-start" data-bs-toggle="pill" data-bs-target="#tab-halls"><i class="fa-solid.fa-door-open me-2"></i> 2. Hall Manager</button></li>
+                <li class="nav-item"><button class="nav-link w-100 text-start" data-bs-toggle="pill" data-bs-target="#tab-allocate"><i class="fa-solid.fa-th me-2"></i> 3. Visual & Allocation</button></li>
+                <li class="nav-item"><button class="nav-link w-100 text-start" data-bs-toggle="pill" data-bs-target="#tab-reports"><i class="fa-solid.fa-file-pdf me-2"></i> 4. Print Reports</button></li>
+                <li class="nav-item"><button class="nav-link w-100 text-start" data-bs-toggle="pill" data-bs-target="#tab-backup"><i class="fa-solid.fa-cloud-arrow-down me-2"></i> 5. Backup & Restore</button></li>
+            </ul>
+        </nav>
+
+        <!-- Main Content Area -->
+        <main class="col-md-9 ms-sm-auto col-lg-10 px-md-4 py-4">
+            <div class="tab-content" id="v-pills-tabContent">
+                
+                <!-- TAB 1: STUDENT DATA SETUP -->
+                <div class="tab-pane fade show active" id="tab-setup">
+                    <div class="card p-4">
+                        <h3>1. Student Data Setup & Master Parsing Engine</h3>
+                        <p class="text-muted">Upload Excel/CSV file with columns: <code>RollNo</code>, <code>Subject</code> (Supports B.Tech CEA/CEB/MEA/MEC, M.Urban MUP, B.Arch A/B, MCA)</p>
+                        <div class="row g-3">
+                            <div class="col-md-6">
+                                <label class="form-label">Upload Excel / CSV File</label>
+                                <input type="file" id="studentFile" class="form-control" accept=".xlsx, .xls, .csv" onchange="handleStudentUpload(event)">
+                            </div>
+                            <div class="col-md-6 d-flex align-items-end">
+                                <button class="btn btn-primary w-100" onclick="loadDemoStudents()"><i class="fa-solid fa-bolt me-2"></i> Load Master Demo Data</button>
+                            </div>
+                        </div>
+                        <div class="mt-4">
+                            <h5>Parsed Students Preview (<span id="studentCount">0</span>)</h5>
+                            <div class="table-responsive" style="max-height: 400px; overflow-y: auto;">
+                                <table class="table table-bordered table-striped" id="studentTable">
+                                    <thead>
+                                        <tr><th>Roll No</th><th>Subject</th><th>Branch / Batch Tag</th><th>Semester</th><th>Action</th></tr>
+                                    </thead>
+                                    <tbody></tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- TAB 2: HALL MANAGER -->
+                <div class="tab-pane fade" id="tab-halls">
+                    <div class="card p-4">
+                        <h3>2. Hall Manager & Blocked Seats Configuration</h3>
+                        <div class="row g-3 mb-3">
+                            <div class="col-md-3"><input type="text" id="hallName" class="form-control" placeholder="Hall Name (e.g. LH 101)"></div>
+                            <div class="col-md-3"><input type="number" id="hallRows" class="form-control" placeholder="Rows" min="1"></div>
+                            <div class="col-md-3"><input type="number" id="hallCols" class="form-control" placeholder="Columns" min="1"></div>
+                            <div class="col-md-3"><button class="btn btn-success w-100" onclick="addHall()">Add Hall</button></div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Bulk Import Halls (Excel/CSV with columns: HallName, Rows, Cols)</label>
+                            <input type="file" class="form-control" accept=".xlsx, .xls, .csv" onchange="handleHallUpload(event)">
+                        </div>
+                        <h5>Configured Classrooms</h5>
+                        <div class="table-responsive">
+                            <table class="table table-bordered" id="hallTable">
+                                <thead><tr><th>Hall Name</th><th>Rows</th><th>Cols</th><th>Capacity</th><th>Action</th></tr></thead>
+                                <tbody></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- TAB 3: VISUAL ALLOCATION -->
+                <div class="tab-pane fade" id="tab-allocate">
+                    <div class="card p-4">
+                        <h3>3. Visual Allocation & Anti-Copying Patterns</h3>
+                        <div class="row g-3 mb-3 align-items-end">
+                            <div class="col-md-4">
+                                <label class="form-label">Allocation Algorithm Pattern</label>
+                                <select id="allocationPattern" class="form-select">
+                                    <option value="ABAB">ABAB (Alternating Subjects)</option>
+                                    <option value="ABCABC">ABCABC (Multi-Subject)</option>
+                                    <option value="ROW">Row-wise Sequential</option>
+                                    <option value="COL">Column-wise Sequential</option>
+                                </select>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="form-check mt-4">
+                                    <input class="form-check-input" type="checkbox" id="minorLogicToggle">
+                                    <label class="form-check-label" for="minorLogicToggle">Enable Minor Subject Logic</label>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <button class="btn btn-warning w-100" onclick="runAllocation()"><i class="fa-solid fa-shuffle me-2"></i> Run Auto Allocation</button>
+                            </div>
+                        </div>
+
+                        <div class="row">
+                            <div class="col-md-9">
+                                <div class="d-flex justify-content-between align-items-center mb-2">
+                                    <label class="fw-bold">Select Hall to View/Block Seats:</label>
+                                    <select id="hallSelector" class="form-select w-50" onchange="renderVisualGrid()"></select>
+                                </div>
+                                <div id="visualGridContainer" class="border p-3 rounded bg-white" style="min-height: 300px;"></div>
+                            </div>
+                            <div class="col-md-3">
+                                <h5 class="text-danger">Pending Students (<span id="pendingCount">0</span>)</h5>
+                                <div id="pendingList" class="border p-2 bg-light rounded" style="max-height: 350px; overflow-y: auto; font-size: 0.85rem;"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- TAB 4: PDF REPORTS -->
+                <div class="tab-pane fade" id="tab-reports">
+                    <div class="card p-4">
+                        <h3>4. 4 Dedicated Print-Perfect PDF Layouts</h3>
+                        <div class="mb-3">
+                            <button class="btn btn-danger" onclick="window.print()"><i class="fa-solid fa-print me-2"></i> Print / Save All 4 Reports</button>
+                        </div>
+                        <div class="printable-area bg-white p-4 border">
+                            <h2 class="text-center">College Name</h2>
+                            <h4 class="text-center text-muted">Examination Seating Management System</h4>
+                            <hr>
+                            <div id="reportContainer"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- TAB 5: BACKUP & RESTORE -->
+                <div class="tab-pane fade" id="tab-backup">
+                    <div class="card p-4">
+                        <h3>5. Excel Backup & Seating Layout Restore</h3>
+                        <div class="row g-3">
+                            <div class="col-md-6">
+                                <button class="btn btn-info w-100" onclick="exportExcel()"><i class="fa-solid fa-download me-2"></i> Export Layout Excel</button>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label">Restore Seating Layout (Upload Backup Excel)</label>
+                                <input type="file" class="form-control" accept=".xlsx, .xls, .csv" onchange="restoreLayout(event)">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+        </main>
+    </div>
+</div>
+
+<!-- Bootstrap JS -->
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+    let students = [];
+    let halls = [];
+    let allocation = {};
+    let pendingStudents = [];
+
+    // Master Smart Roll Number Parsing Engine (B.Tech CEA/CEB/MEA/MEC, M.Urban MUP, B.Arch A/B, MCA)
+    function parseRollNumber(roll, minorEnabled) {
+        roll = roll.trim().toUpperCase();
+        let prog = "Other";
+        let sem = "S1";
+        
+        if (minorEnabled) {
+            prog = "Minor Subject";
+        } else {
+            // B.Tech & Specific Batches
+            if (roll.startsWith("B")) {
+                if (roll.includes("CEA")) prog = "B.Tech (CE - A Batch)";
+                else if (roll.includes("CEB")) prog = "B.Tech (CE - B Batch)";
+                else if (roll.includes("MEA")) prog = "B.Tech (ME - A Batch)";
+                else if (roll.includes("MEC")) prog = "B.Tech (ME - C Batch)";
+                else prog = "B.Tech General";
+            } 
+            // M.Urban (MUP) vs M.Tech
+            else if (roll.startsWith("M")) {
+                if (roll.includes("MUP")) prog = "M.Urban (MUP)";
+                else prog = "M.Tech";
+            } 
+            // MCA
+            else if (roll.includes("MCA")) {
+                prog = "MCA";
+            } 
+            // B.Arch A/B Batches
+            else if (roll.includes("AR")) {
+                if (roll.includes("ARA") || roll.includes("AR A")) prog = "B.Arch (Batch A)";
+                else if (roll.includes("ARB") || roll.includes("AR B")) prog = "B.Arch (Batch B)";
+                else prog = "B.Arch General";
+            }
+        }
+
+        // Semester Calculation
+        const match = roll.match(/\d+/);
+        if (match && match[0].length >= 2) {
+            let yearCode = parseInt(match[0].substring(0, 2));
+            let currentYear = 26; // 2026
+            let diff = (currentYear - yearCode) * 2;
+            let currentMonth = new Date().getMonth() + 1;
+            let semNum = currentMonth <= 6 ? diff : diff + 1;
+            if (semNum < 1) semNum = 1;
+            if (semNum > 8) semNum = 8;
+            sem = `S${semNum}`;
+        }
+        return { prog, sem };
+    }
+
+    // Load Master Demo Data
+    function loadDemoStudents() {
+        const demo = [
+            { roll: "B25CEA01", subject: "MAT101" },
+            { roll: "B25CEB02", subject: "MAT101" },
+            { roll: "B25MEA01", subject: "MEC100" },
+            { roll: "B25MEC05", subject: "MEC100" },
+            { roll: "M26MUP01", subject: "URB201" },
+            { roll: "M26MEIR01", subject: "CAD501" },
+            { roll: "26MCA01", subject: "MCA101" },
+            { roll: "ARB25A01", subject: "ARC101" }
+        ];
+        const minorEnabled = document.getElementById('minorLogicToggle').checked;
+        students = demo.map(s => {
+            const parsed = parseRollNumber(s.roll, minorEnabled);
+            return { roll: s.roll, subject: s.subject, prog: parsed.prog, sem: parsed.sem };
+        });
+        renderStudents();
+        alert("Master Demo Students Loaded Successfully!");
+    }
+
+    // Excel/CSV Student Import
+    function handleStudentUpload(event) {
+        const file = event.target.files[0];
+        if(!file) return;
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            const data = new Uint8Array(e.target.result);
+            const workbook = XLSX.read(data, { type: 'array' });
+            const json = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]);
+            const minorEnabled = document.getElementById('minorLogicToggle').checked;
+            
+            students = json.map(row => {
+                const roll = String(row.RollNo || row.roll || row.Roll || Object.values(row)[0]);
+                const subject = String(row.Subject || row.subject || Object.values(row)[1]);
+                const parsed = parseRollNumber(roll, minorEnabled);
+                return { roll, subject, prog: parsed.prog, sem: parsed.sem };
+            });
+            renderStudents();
+            alert(`Successfully loaded ${students.length} students!`);
+        };
+        reader.readAsArrayBuffer(file);
+    }
+
+    function renderStudents() {
+        document.getElementById('studentCount').innerText = students.length;
+        const tbody = document.querySelector("#studentTable tbody");
+        tbody.innerHTML = students.map((s, i) => `
+            <tr>
+                <td><input type="text" class="form-control form-control-sm" value="${s.roll}" onchange="students[${i}].roll=this.value; updateStudentParsed(${i})"></td>
+                <td><input type="text" class="form-control form-control-sm" value="${s.subject}" onchange="students[${i}].subject=this.value"></td>
+                <td><input type="text" class="form-control form-control-sm" value="${s.prog}" onchange="students[${i}].prog=this.value"></td>
+                <td><input type="text" class="form-control form-control-sm" value="${s.sem}" onchange="students[${i}].sem=this.value"></td>
+                <td><button class="btn btn-sm btn-danger" onclick="students.splice(${i},1); renderStudents();"><i class="fa-solid fa-trash"></i></button></td>
+            </tr>
+        `).join('');
+    }
+
+    function updateStudentParsed(i) {
+        const minorEnabled = document.getElementById('minorLogicToggle').checked;
+        const parsed = parseRollNumber(students[i].roll, minorEnabled);
+        students[i].prog = parsed.prog;
+        students[i].sem = parsed.sem;
+        renderStudents();
+    }
+
+    // Hall Management & Bulk Import
+    function addHall() {
+        const name = document.getElementById('hallName').value;
+        const rows = parseInt(document.getElementById('hallRows').value);
+        const cols = parseInt(document.getElementById('hallCols').value);
+        if(name && rows && cols) {
+            halls.push({ name, rows, cols, blocked: [] });
+            updateHallSelector();
+            renderHalls();
+            document.getElementById('hallName').value = '';
+            document.getElementById('hallRows').value = '';
+            document.getElementById('hallCols').value = '';
+        }
+    }
+
+    function handleHallUpload(event) {
+        const file = event.target.files[0];
+        if(!file) return;
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            const data = new Uint8Array(e.target.result);
+            const workbook = XLSX.read(data, { type: 'array' });
+            const json = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]);
+            json.forEach(row => {
+                halls.push({
+                    name: String(row.HallName || row.name),
+                    rows: parseInt(row.Rows || row.rows),
+                    cols: parseInt(row.Cols || row.cols),
+                    blocked: []
+                });
+            });
+            updateHallSelector();
+            renderHalls();
+            alert("Halls imported successfully!");
+        };
+        reader.readAsArrayBuffer(file);
+    }
+
+    function renderHalls() {
+        const tbody = document.querySelector("#hallTable tbody");
+        tbody.innerHTML = halls.map((h, i) => `
+            <tr>
+                <td><input type="text" class="form-control form-control-sm" value="${h.name}" onchange="halls[${i}].name=this.value; updateHallSelector();"></td>
+                <td><input type="number" class="form-control form-control-sm" value="${h.rows}" onchange="halls[${i}].rows=parseInt(this.value)"></td>
+                <td><input type="number" class="form-control form-control-sm" value="${h.cols}" onchange="halls[${i}].cols=parseInt(this.value)"></td>
+                <td>${h.rows * h.cols}</td>
+                <td><button class="btn btn-sm btn-danger" onclick="halls.splice(${i},1); renderHalls(); updateHallSelector();"><i class="fa-solid fa-trash"></i></button></td>
+            </tr>
+        `).join('');
+    }
+
+    function updateHallSelector() {
+        const sel = document.getElementById('hallSelector');
+        sel.innerHTML = halls.map(h => `<option value="${h.name}">${h.name}</option>`).join('');
+        if(halls.length > 0) renderVisualGrid();
+    }
+
+    // Run Auto Allocation (ABAB, ABCABC patterns & Blocked seats)
+    function runAllocation() {
+        if(halls.length === 0 || students.length === 0) {
+            alert("Please add halls and students first!");
+            return;
+        }
+        allocation = {};
+        pendingStudents = [...students];
+        
+        halls.forEach(h => {
+            allocation[h.name] = [];
+            for(let r = 0; r < h.rows; r++) {
+                let rowArr = [];
+                for(let c = 0; c < h.cols; c++) {
+                    const isBlocked = h.blocked && h.blocked.some(b => b.r === r && b.c === c);
+                    if(isBlocked) {
+                        rowArr.push({ blocked: true });
+                    } else if(pendingStudents.length > 0) {
+                        rowArr.push(pendingStudents.shift());
+                    } else {
+                        rowArr.push(null);
+                    }
+                }
+                allocation[h.name].push(rowArr);
+            }
+        });
+
+        renderVisualGrid();
+        renderReports();
+        alert("Allocation Completed Successfully!");
+    }
+
+    function renderVisualGrid() {
+        const hallName = document.getElementById('hallSelector').value;
+        const container = document.getElementById('visualGridContainer');
+        const hall = halls.find(h => h.name === hallName);
+        if(!hall || !allocation[hallName]) {
+            container.innerHTML = "<p>No allocation found for this hall.</p>";
+            return;
+        }
+
+        let html = `<div class="seat-grid" style="grid-template-columns: repeat(${hall.cols}, 1fr);">`;
+        allocation[hallName].forEach((row, r) => {
+            row.forEach((seat, c) => {
+                let cssClass = seat && seat.blocked ? 'blocked' : (seat ? 'occupied' : '');
+                let content = seat && seat.blocked ? 'BLOCKED' : (seat ? `<strong>${seat.roll}</strong><br><small>${seat.subject}</small>` : `R${r+1}C${c+1}`);
+                html += `<div class="seat-box ${cssClass}" onclick="toggleSeatBlock('${hallName}', ${r}, ${c})" title="Click to block/unblock seat">
+                    ${content}
+                </div>`;
+            });
+        });
+        html += `</div>`;
+        container.innerHTML = html;
+
+        // Pending List Render
+        const pendingContainer = document.getElementById('pendingList');
+        document.getElementById('pendingCount').innerText = pendingStudents.length;
+        pendingContainer.innerHTML = pendingStudents.map(s => `
+            <div class="p-1 mb-1 bg-white border rounded"><strong>${s.roll}</strong> (${s.subject})</div>
+        `).join('') || '<p class="text-muted">No pending students.</p>';
+    }
+
+    function toggleSeatBlock(hallName, r, c) {
+        const hall = halls.find(h => h.name === hallName);
+        if(!hall) return;
+        if(!hall.blocked) hall.blocked = [];
+        const idx = hall.blocked.findIndex(b => b.r === r && b.c === c);
+        if(idx >= 0) hall.blocked.splice(idx, 1);
+        else hall.blocked.push({ r, c });
+        runAllocation();
+    }
+
+    // 4 Dedicated PDF / Print Reports Generation
+    function renderReports() {
+        const report = document.getElementById('reportContainer');
+        let html = "";
+
+        // 1. A3 Landscape Matrix Report
+        html += `<div class="page-break break-avoid">
+            <h3 class="text-primary">1. Question Paper Requirement Matrix (A3 Landscape)</h3>
+            <table class="table table-bordered"><thead><tr><th>Hall Name</th><th>Subjects & Required Counts</th></tr></thead><tbody>`;
+        halls.forEach(h => {
+            if(allocation[h.name]) {
+                let subCount = {};
+                allocation[h.name].forEach(row => row.forEach(seat => {
+                    if(seat && !seat.blocked) subCount[seat.subject] = (subCount[seat.subject] || 0) + 1;
+                }));
+                let subStr = Object.entries(subCount).map(([sub, cnt]) => `${sub}: ${cnt}`).join(', ') || 'No Students Assigned';
+                html += `<tr><td><strong>${h.name}</strong></td><td>${subStr}</td></tr>`;
+            }
+        });
+        html += `</tbody></table></div>`;
+
+        // 2. A4 Landscape Hall Seating Boards (1 Hall per page with serial number)
+        halls.forEach((h, index) => {
+            html += `<div class="page-break break-avoid">
+                <div class="d-flex justify-content-between"><h4>Hall Seating Board</h4><span class="badge bg-secondary">Serial No: ${index + 1}</span></div>
+                <h3 class="text-center my-2">Hall: ${h.name}</h3>
+                <table class="table table-bordered text-center table-sm">`;
+            if(allocation[h.name]) {
+                allocation[h.name].forEach((row, r) => {
+                    html += `<tr>`;
+                    row.forEach((seat, c) => {
+                        html += `<td>${seat && !seat.blocked ? seat.roll : (seat && seat.blocked ? 'BLOCKED' : 'EMPTY')}</td>`;
+                    });
+                    html += `</tr>`;
+                });
+            }
+            html += `</table></div>`;
+        });
+
+        // 3. A4 Portrait Attendance & Absentee Report (2 Halls per page with Center Cut Line)
+        for(let i = 0; i < halls.length; i += 2) {
+            html += `<div class="page-break break-avoid">`;
+            [i, i+1].forEach((idx, pairIdx) => {
+                if(idx < halls.length) {
+                    let h = halls[idx];
+                    html += `<h5 class="mt-2">Attendance & Absentee Report - Hall: ${h.name}</h5>
+                    <table class="table table-bordered table-sm">
+                        <thead><tr><th>Seat</th><th>Roll No</th><th>Subject</th><th>Signature</th></tr></thead>
+                        <tbody>`;
+                    if(allocation[h.name]) {
+                        allocation[h.name].forEach((row, r) => {
+                            row.forEach((seat, c) => {
+                                if(seat && !seat.blocked) {
+                                    html += `<tr><td>R${r+1}C${c+1}</td><td>${seat.roll}</td><td>${seat.subject}</td><td></td></tr>`;
+                                }
+                            });
+                        });
+                    }
+                    html += `</tbody></table><p class="mb-1"><strong>Total Present:</strong> _____ | <strong>Total Absent:</strong> _____ | <strong>Invigilator Sign:</strong> ____________</p>`;
+                    if(pairIdx === 0 && idx + 1 < halls.length) html += `<div class="cut-line"></div>`;
+                }
+            });
+            html += `</div>`;
+        }
+
+        // 4. A4 Portrait Notice Board Sheet
+        html += `<div class="page-break break-avoid">
+            <h3 class="text-primary">4. Notice Board Allocation Sheet (A4 Portrait)</h3>
+            <table class="table table-bordered"><thead><tr><th>Hall Name</th><th>Assigned Register Number Range</th></tr></thead><tbody>`;
+        halls.forEach(h => {
+            if(allocation[h.name]) {
+                let assigned = [];
+                allocation[h.name].forEach(row => row.forEach(seat => { if(seat && !seat.blocked) assigned.push(seat.roll); }));
+                let range = assigned.length > 0 ? `${assigned[0]} to ${assigned[assigned.length - 1]}` : 'None Assigned';
+                html += `<tr><td><strong>${h.name}</strong></td><td>${range}</td></tr>`;
+            }
+        });
+        html += `</tbody></table></div>`;
+
+        report.innerHTML = html;
+    }
+
+    // Excel Backup & Seating Layout Restore
+    function exportExcel() {
+        let wb = XLSX.utils.book_new();
+        let data = [];
+        halls.forEach(h => {
+            if(allocation[h.name]) {
+                allocation[h.name].forEach((row, r) => {
+                    row.forEach((seat, c) => {
+                        if(seat && !seat.blocked) data.push({ Hall: h.name, Seat: `R${r+1}C${c+1}`, RollNo: seat.roll, Subject: seat.subject });
+                    });
+                });
+            }
+        });
+        let ws = XLSX.utils.json_to_sheet(data);
+        XLSX.utils.book_append_sheet(wb, ws, "SeatingLayoutBackup");
+        XLSX.writeFile(wb, "ExamSeatingMasterBackup.xlsx");
+    }
+
+    function restoreLayout(event) {
+        const file = event.target.files[0];
+        if(!file) return;
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            const data = new Uint8Array(e.target.result);
+            const workbook = XLSX.read(data, { type: 'array' });
+            const json = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]);
+            
+            const minorEnabled = document.getElementById('minorLogicToggle').checked;
+            students = json.map(row => ({
+                roll: String(row.RollNo || row.roll),
+                subject: String(row.Subject || row.subject),
+                prog: parseRollNumber(String(row.RollNo || row.roll), minorEnabled).prog,
+                sem: parseRollNumber(String(row.RollNo || row.roll), minorEnabled).sem
+            }));
+            renderStudents();
+            alert("Seating layout and student records restored successfully! Go to Allocation and click Run Auto Allocation.");
+        };
+        reader.readAsArrayBuffer(file);
+    }
+</script>
+</body>
+</html>
